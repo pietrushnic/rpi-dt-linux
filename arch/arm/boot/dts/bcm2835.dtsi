@@ -174,6 +174,11 @@
 		};
 	};
 
+	cpufreq {
+		compatible = "brcm,bcm2835-cpufreq";
+		brcm,bcm2835-mbox = <&mailbox>;
+	};
+
 	clocks {
 		compatible = "simple-bus";
 		#address-cells = <1>;
