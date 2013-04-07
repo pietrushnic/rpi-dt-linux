@@ -63,6 +63,12 @@
 			mboxes = <&mailbox 8>;
 		};
 
+		cpufreq {
+			compatible = "brcm,bcm2835-cpufreq";
+			mbox-names = "property";
+			mboxes = <&mailbox 8>;
+		};
+
 		watchdog@7e100000 {
 			compatible = "brcm,bcm2835-pm-wdt";
 			reg = <0x7e100000 0x28>;
@@ -161,11 +167,6 @@
 		arm-pmu {
 			compatible = "arm,arm1176-pmu";
 		};
-	};
-
-	cpufreq {
-		compatible = "brcm,bcm2835-cpufreq";
-		brcm,bcm2835-mbox = <&mailbox>;
 	};
 
 	clocks {

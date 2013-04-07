@@ -247,3 +247,11 @@ config ARM_TEGRA_CPUFREQ
 	default y
 	help
 	  This adds the CPUFreq driver support for TEGRA SOCs.
+
+config ARM_BCM2835_CPUFREQ
+	tristate "BCM2835 CPUFreq support"
+	depends on BCM2835_MBOX
+	help
+	  This adds the CPUFreq driver for BCM2835
+
+	  If in doubt, say N.
