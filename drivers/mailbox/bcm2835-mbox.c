@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 2010 Broadcom
- *  Copyright (C) 2013 Lubomir Rintel
+ *  Copyright (C) 2013-2014 Lubomir Rintel
  *  Copyright (C) 2013 Craig McGeachie
  *
  * This program is free software; you can redistribute it and/or modify
@@ -65,7 +65,7 @@ struct bcm2835_mbox;
 
 struct bcm2835_channel {
 	struct bcm2835_mbox *mbox;
-	struct ipc_link link;
+	struct mbox_chan *link;
 	u32 chan_num;
 	const char *name;
 	bool started;
@@ -77,10 +77,10 @@ struct bcm2835_mbox {
 	void __iomem *regs;
 	spinlock_t lock;
 	struct bcm2835_channel *channel[MBOX_CHAN_COUNT];
-	struct ipc_controller controller;
+	struct mbox_controller controller;
 };
 
-#define to_channel(link) container_of(link, struct bcm2835_channel, link)
+#define to_channel(link) ((struct bcm2835_channel *)link->con_priv)
 
 static irqreturn_t bcm2835_mbox_irq(int irq, void *dev_id)
 {
@@ -99,14 +99,14 @@ static irqreturn_t bcm2835_mbox_irq(int irq, void *dev_id)
 			continue;
 		}
 		dev_dbg(dev, "Reply 0x%08X\n", msg);
-		ipc_link_received_data(&mbox->channel[chan]->link,
+		mbox_chan_received_data(mbox->channel[chan]->link,
 			(void *) MBOX_DATA28(msg));
 	}
 	rmb(); /* Finished last mailbox read. */
 	return IRQ_HANDLED;
 }
 
-static int bcm2835_send_data(struct ipc_link *link, void *data)
+static int bcm2835_send_data(struct mbox_chan *link, void *data)
 {
 	struct bcm2835_channel *chan = to_channel(link);
 	struct bcm2835_mbox *mbox = chan->mbox;
@@ -129,20 +129,20 @@ end:
 	return ret;
 }
 
-static int bcm2835_startup(struct ipc_link *link, void *params)
+static int bcm2835_startup(struct mbox_chan *link)
 {
 	struct bcm2835_channel *chan = to_channel(link);
 	chan->started = true;
 	return 0;
 }
 
-static void bcm2835_shutdown(struct ipc_link *link)
+static void bcm2835_shutdown(struct mbox_chan *link)
 {
 	struct bcm2835_channel *chan = to_channel(link);
 	chan->started = false;
 }
 
-static bool bcm2835_is_ready(struct ipc_link *link)
+static bool bcm2835_last_tx_done(struct mbox_chan *link)
 {
 	struct bcm2835_channel *chan = to_channel(link);
 	struct bcm2835_mbox *mbox = chan->mbox;
@@ -157,11 +157,11 @@ static bool bcm2835_is_ready(struct ipc_link *link)
 	return ret;
 }
 
-static struct ipc_link_ops bcm2835_ipc_link_ops = {
+static struct mbox_chan_ops bcm2835_mbox_chan_ops = {
 	.send_data	= bcm2835_send_data,
 	.startup	= bcm2835_startup,
 	.shutdown	= bcm2835_shutdown,
-	.is_ready	= bcm2835_is_ready
+	.last_tx_done	= bcm2835_last_tx_done
 };
 
 static int request_mailbox_iomem(struct bcm2835_mbox *mbox)
@@ -205,8 +205,8 @@ static int parse_bcm2835_channels(struct bcm2835_mbox *mbox)
 	struct device *dev = mbox->dev;
 	struct device_node *np = dev->of_node;
 	int chan_cnt, dsize;
-	unsigned int i, blk_size;
-	void *channel_blk, *links_blk;
+	unsigned int i;
+	struct bcm2835_channel *chans;
 
 	chan_cnt = of_property_count_strings(np, "brcm,channel-names");
 	if (!chan_cnt) {
@@ -218,40 +218,45 @@ static int parse_bcm2835_channels(struct bcm2835_mbox *mbox)
 		dev_err(dev, "Counts of brcm,channel-names and brcm,channel-nums mismatch\n");
 		return -ENODEV;
 	}
-	blk_size = sizeof(struct bcm2835_channel) * chan_cnt +
-		sizeof(struct ipc_link *) * (chan_cnt + 1);
-	channel_blk = devm_kzalloc(dev, blk_size, GFP_KERNEL);
-	if (!channel_blk) {
-		dev_err(dev, "Failed to alloc ipc_links\n");
+
+	mbox->controller.num_chans = chan_cnt;
+	mbox->controller.chans = devm_kzalloc(dev,
+		sizeof(struct mbox_chan) * chan_cnt,
+		GFP_KERNEL);
+	if (!mbox->controller.chans) {
+		dev_err(dev, "Failed to alloc mbox_chans\n");
 		return -ENOMEM;
 	}
-	links_blk = channel_blk + sizeof(struct bcm2835_channel) * chan_cnt;
-	mbox->controller.links = (struct ipc_link **) links_blk;
+
+	chans = devm_kzalloc(dev,
+		sizeof(struct bcm2835_channel) * chan_cnt,
+		GFP_KERNEL);
+	if (!chans) {
+		dev_err(dev, "Failed to alloc bcm2835_channel\n");
+		return -ENOMEM;
+	}
+
 	for (i = 0; i != chan_cnt; ++i) {
-		struct bcm2835_channel *channel =
-			&((struct bcm2835_channel *)channel_blk)[i];
 		if (of_property_read_string_index(np, "brcm,channel-names", i,
-			&channel->name)) {
+			&chans[i].name)) {
 			dev_err(dev, "Channel name index %d read failed\n", i);
 			return -ENODEV;
 		}
 		if (of_property_read_u32_index(np, "brcm,channel-nums", i,
-			&channel->chan_num)) {
+			&chans[i].chan_num)) {
 			dev_err(dev, "Channel num index %d read failed\n", i);
 			return -ENODEV;
 		}
-		if (channel->chan_num >= MBOX_CHAN_COUNT) {
+		if (chans[i].chan_num >= MBOX_CHAN_COUNT) {
 			dev_err(dev, "Channel num %d too big\n",
-				channel->chan_num);
+				chans[i].chan_num);
 			return -ENODEV;
 		}
-		snprintf(channel->link.link_name, 16, channel->name);
-		channel->mbox = mbox;
-		mbox->channel[channel->chan_num] = channel;
-		mbox->controller.links[i] = &channel->link;
-
+		chans[i].mbox = mbox;
+		chans[i].link = &mbox->controller.chans[i];
+		mbox->channel[chans[i].chan_num] = &chans[i];
+		mbox->controller.chans[i].con_priv = (void *)&chans[i];
 	}
-	mbox->controller.links[chan_cnt] = NULL;
 	dev_dbg(dev, "Channels parsed\n");
 
 	return 0;
@@ -289,12 +294,12 @@ static int bcm2835_mbox_probe(struct platform_device *pdev)
 	if (ret)
 		goto end;
 
-	dev_dbg(dev, "Initialising mailbox controller\n");
-	snprintf(mbox->controller.controller_name, 16, "bcm2835");
+	dev_dbg(dev, "Initializing mailbox controller\n");
 	mbox->controller.txdone_poll = true;
 	mbox->controller.txpoll_period = 5;
-	mbox->controller.ops = &bcm2835_ipc_link_ops;
-	ret  = ipc_links_register(&mbox->controller);
+	mbox->controller.ops = &bcm2835_mbox_chan_ops;
+	mbox->controller.dev = dev;
+	ret  = mbox_controller_register(&mbox->controller);
 	if (ret)
 		goto end;
 	/* Enable the interrupt on data reception */
@@ -308,7 +313,7 @@ end:
 static int bcm2835_mbox_remove(struct platform_device *pdev)
 {
 	struct bcm2835_mbox *mbox = platform_get_drvdata(pdev);
-	ipc_links_unregister(&mbox->controller);
+	mbox_controller_unregister(&mbox->controller);
 	return 0;
 }
 
