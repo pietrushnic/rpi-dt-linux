@@ -50,11 +50,15 @@
 			#interrupt-cells = <2>;
 		};
 
-		mailbox@0x7e00b880 {
+		mailbox: mailbox@0x7e00b880 {
 			compatible = "brcm,bcm2835-mbox";
 			reg = <0x7e00b880 0x40>;
 			interrupts = <0 1>;
 			#mbox-cells = <1>;
+		};
+
+		thermal {
+			compatible = "brcm,bcm2835-thermal";
 		};
 
 		watchdog@7e100000 {
