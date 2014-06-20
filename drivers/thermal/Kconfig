@@ -157,6 +157,15 @@ config DOVE_THERMAL
 	  Support for the Dove thermal sensor driver in the Linux thermal
 	  framework.
 
+config BCM2835_THERMAL
+	tristate "Temperature sensor on Broadcom BCM2835 SoC"
+	depends on ARCH_BCM2835
+	depends on BCM2835_MBOX
+	help
+	  Support for the Broadcom BCM2835 thermal sensor driver in the Linux
+	  thermal framework.  The BCM2835 has one sensor on chip, with one trip
+	  point and no cooling devices.
+
 config DB8500_THERMAL
 	bool "DB8500 thermal management"
 	depends on ARCH_U8500
