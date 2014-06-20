@@ -17,6 +17,9 @@ obj-y				+= pwm/
 obj-$(CONFIG_PCI)		+= pci/
 obj-$(CONFIG_PARISC)		+= parisc/
 obj-$(CONFIG_RAPIDIO)		+= rapidio/
+
+# Mailbox must come before drivers that rely on it
+obj-$(CONFIG_MAILBOX)		+= mailbox/
 obj-y				+= video/
 obj-y				+= idle/
 
@@ -138,7 +141,6 @@ obj-y				+= platform/
 #common clk code
 obj-y				+= clk/
 
-obj-$(CONFIG_MAILBOX)		+= mailbox/
 obj-$(CONFIG_HWSPINLOCK)	+= hwspinlock/
 obj-$(CONFIG_IOMMU_SUPPORT)	+= iommu/
 obj-$(CONFIG_REMOTEPROC)	+= remoteproc/
