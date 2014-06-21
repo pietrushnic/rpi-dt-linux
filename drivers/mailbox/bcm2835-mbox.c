@@ -67,7 +67,6 @@ struct bcm2835_channel {
 	struct bcm2835_mbox *mbox;
 	struct mbox_chan *link;
 	u32 chan_num;
-	const char *name;
 	bool started;
 };
 
@@ -76,7 +75,7 @@ struct bcm2835_mbox {
 	struct device *dev;
 	void __iomem *regs;
 	spinlock_t lock;
-	struct bcm2835_channel *channel[MBOX_CHAN_COUNT];
+	struct bcm2835_channel channel[MBOX_CHAN_COUNT];
 	struct mbox_controller controller;
 };
 
@@ -90,16 +89,12 @@ static irqreturn_t bcm2835_mbox_irq(int irq, void *dev_id)
 		u32 msg = readl(mbox->regs + MAIL0_RD);
 		unsigned int chan = MBOX_CHAN(msg);
 
-		if (!mbox->channel[chan]) {
-			dev_err(dev, "Unregistered channel %d\n", chan);
-			continue;
-		}
-		if (!mbox->channel[chan]->started) {
+		if (!mbox->channel[chan].started) {
 			dev_err(dev, "Reply on stopped channel %d\n", chan);
 			continue;
 		}
 		dev_dbg(dev, "Reply 0x%08X\n", msg);
-		mbox_chan_received_data(mbox->channel[chan]->link,
+		mbox_chan_received_data(mbox->channel[chan].link,
 			(void *) MBOX_DATA28(msg));
 	}
 	rmb(); /* Finished last mailbox read. */
@@ -200,72 +195,11 @@ static int request_mailbox_irq(struct bcm2835_mbox *mbox)
 	return 0;
 }
 
-static int parse_bcm2835_channels(struct bcm2835_mbox *mbox)
-{
-	struct device *dev = mbox->dev;
-	struct device_node *np = dev->of_node;
-	int chan_cnt, dsize;
-	unsigned int i;
-	struct bcm2835_channel *chans;
-
-	chan_cnt = of_property_count_strings(np, "brcm,channel-names");
-	if (!chan_cnt) {
-		dev_err(dev, "No channels defined\n");
-		return -ENODEV;
-	}
-	of_get_property(np, "brcm,channel-nums", &dsize);
-	if (dsize != sizeof(u32) * chan_cnt) {
-		dev_err(dev, "Counts of brcm,channel-names and brcm,channel-nums mismatch\n");
-		return -ENODEV;
-	}
-
-	mbox->controller.num_chans = chan_cnt;
-	mbox->controller.chans = devm_kzalloc(dev,
-		sizeof(struct mbox_chan) * chan_cnt,
-		GFP_KERNEL);
-	if (!mbox->controller.chans) {
-		dev_err(dev, "Failed to alloc mbox_chans\n");
-		return -ENOMEM;
-	}
-
-	chans = devm_kzalloc(dev,
-		sizeof(struct bcm2835_channel) * chan_cnt,
-		GFP_KERNEL);
-	if (!chans) {
-		dev_err(dev, "Failed to alloc bcm2835_channel\n");
-		return -ENOMEM;
-	}
-
-	for (i = 0; i != chan_cnt; ++i) {
-		if (of_property_read_string_index(np, "brcm,channel-names", i,
-			&chans[i].name)) {
-			dev_err(dev, "Channel name index %d read failed\n", i);
-			return -ENODEV;
-		}
-		if (of_property_read_u32_index(np, "brcm,channel-nums", i,
-			&chans[i].chan_num)) {
-			dev_err(dev, "Channel num index %d read failed\n", i);
-			return -ENODEV;
-		}
-		if (chans[i].chan_num >= MBOX_CHAN_COUNT) {
-			dev_err(dev, "Channel num %d too big\n",
-				chans[i].chan_num);
-			return -ENODEV;
-		}
-		chans[i].mbox = mbox;
-		chans[i].link = &mbox->controller.chans[i];
-		mbox->channel[chans[i].chan_num] = &chans[i];
-		mbox->controller.chans[i].con_priv = (void *)&chans[i];
-	}
-	dev_dbg(dev, "Channels parsed\n");
-
-	return 0;
-}
-
 static int bcm2835_mbox_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct bcm2835_mbox *mbox;
+	int i;
 	int ret = 0;
 
 	dev_dbg(dev, "Probing\n");
@@ -289,19 +223,33 @@ static int bcm2835_mbox_probe(struct platform_device *pdev)
 	if (ret)
 		goto end;
 
-	dev_dbg(dev, "Parsing channels\n");
-	ret = parse_bcm2835_channels(mbox);
-	if (ret)
-		goto end;
-
 	dev_dbg(dev, "Initializing mailbox controller\n");
 	mbox->controller.txdone_poll = true;
 	mbox->controller.txpoll_period = 5;
 	mbox->controller.ops = &bcm2835_mbox_chan_ops;
 	mbox->controller.dev = dev;
+	mbox->controller.num_chans = MBOX_CHAN_COUNT;
+	mbox->controller.chans = devm_kzalloc(dev,
+		sizeof(struct mbox_chan) * MBOX_CHAN_COUNT,
+		GFP_KERNEL);
+	if (!mbox->controller.chans) {
+		dev_err(dev, "Failed to alloc mbox_chans\n");
+		return -ENOMEM;
+	}
+
+	dev_dbg(dev, "Initializing mailbox channels\n");
+	for (i = 0; i != MBOX_CHAN_COUNT; ++i) {
+		mbox->channel[i].mbox = mbox;
+		mbox->channel[i].link = &mbox->controller.chans[i];
+		mbox->channel[i].chan_num = i;
+		mbox->controller.chans[i].con_priv =
+			(void *)&mbox->channel[i];
+	}
+
 	ret  = mbox_controller_register(&mbox->controller);
 	if (ret)
 		goto end;
+
 	/* Enable the interrupt on data reception */
 	writel(ARM_MC_IHAVEDATAIRQEN, mbox->regs + MAIL0_CNF);
 	dev_info(dev, "mailbox enabled\n");

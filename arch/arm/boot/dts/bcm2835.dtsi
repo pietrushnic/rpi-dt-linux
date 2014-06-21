@@ -55,8 +55,6 @@
 			reg = <0x7e00b880 0x40>;
 			interrupts = <0 1>;
 			#mbox-cells = <1>;
-			brcm,channel-names = "power", "fb", "vchiq", "property";
-			brcm,channel-nums = <0 1 3 8>;
 		};
 
 		watchdog@7e100000 {
