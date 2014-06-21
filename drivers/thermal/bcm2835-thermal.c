@@ -121,7 +121,7 @@ static int do_message(struct bcm2835_therm *therm, dma_addr_t msg_handle)
 	therm_mbox.rxcb = bcm2835_rxcb;
 	therm_mbox.cl_id = therm;
 	mutex_lock(&therm->lock);
-	INIT_COMPLETION(therm->comp);
+	reinit_completion(&therm->comp);
 	channel = ipc_request_channel(&therm_mbox);
 	if (!channel) {
 		dev_err(dev, "No ipc channel\n");
