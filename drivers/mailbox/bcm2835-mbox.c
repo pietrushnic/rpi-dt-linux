@@ -206,8 +206,7 @@ static int bcm2835_mbox_probe(struct platform_device *pdev)
 	mbox = devm_kzalloc(dev, sizeof(*mbox), GFP_KERNEL);
 	if (mbox == NULL) {
 		dev_err(dev, "Failed to allocate mailbox memory\n");
-		ret = -ENOMEM;
-		goto end;
+		return -ENOMEM;
 	}
 	platform_set_drvdata(pdev, mbox);
 	mbox->pdev = pdev;
@@ -217,11 +216,11 @@ static int bcm2835_mbox_probe(struct platform_device *pdev)
 	dev_dbg(dev, "Requesting IRQ\n");
 	ret = request_mailbox_irq(mbox);
 	if (ret)
-		goto end;
+		return ret;
 	dev_dbg(dev, "Requesting iomem\n");
 	ret = request_mailbox_iomem(mbox);
 	if (ret)
-		goto end;
+		return ret;
 
 	dev_dbg(dev, "Initializing mailbox controller\n");
 	mbox->controller.txdone_poll = true;
@@ -248,13 +247,12 @@ static int bcm2835_mbox_probe(struct platform_device *pdev)
 
 	ret  = mbox_controller_register(&mbox->controller);
 	if (ret)
-		goto end;
+		return ret;
 
 	/* Enable the interrupt on data reception */
 	writel(ARM_MC_IHAVEDATAIRQEN, mbox->regs + MAIL0_CNF);
 	dev_info(dev, "mailbox enabled\n");
 
-end:
 	return ret;
 }
 
