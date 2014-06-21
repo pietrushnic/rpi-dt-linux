@@ -59,6 +59,8 @@
 
 		thermal {
 			compatible = "brcm,bcm2835-thermal";
+			mbox-names = "property";
+			mboxes = <&mailbox 8>;
 		};
 
 		watchdog@7e100000 {

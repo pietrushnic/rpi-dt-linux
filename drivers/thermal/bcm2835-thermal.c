@@ -1,5 +1,6 @@
 /*
  *  Copyright (C) 2013 Craig McGeachie
+ *  Copyright (C) 2014 Lubomir Rintel
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -103,34 +104,33 @@ struct bcm2835_therm {
 	struct mutex lock;
 };
 
-static void bcm2835_rxcb(void *cl_id, void *mssg)
+static void bcm2835_rx_callback(struct mbox_client *cl, void *mssg)
 {
-	struct bcm2835_therm *therm = cl_id;
+	struct bcm2835_therm *therm = dev_get_drvdata(cl->dev);
 	complete(&therm->comp);
 }
 
 static int do_message(struct bcm2835_therm *therm, dma_addr_t msg_handle)
 {
 	struct device *dev = therm->dev;
-	struct ipc_client therm_mbox;
-	void *channel;
+	struct mbox_client therm_mbox;
+	struct mbox_chan *channel;
 	int ret = 0;
 
 	memset(&therm_mbox, 0, sizeof(therm_mbox));
-	therm_mbox.chan_name = "bcm2835:property";
-	therm_mbox.rxcb = bcm2835_rxcb;
-	therm_mbox.cl_id = therm;
+	therm_mbox.rx_callback = bcm2835_rx_callback;
+	therm_mbox.dev = dev;
 	mutex_lock(&therm->lock);
 	reinit_completion(&therm->comp);
-	channel = ipc_request_channel(&therm_mbox);
-	if (!channel) {
-		dev_err(dev, "No ipc channel\n");
-		ret = -EAGAIN;
+	channel = mbox_request_channel(&therm_mbox, 0);
+	if (IS_ERR(channel)) {
+		dev_err(dev, "No mbox channel\n");
+		ret = PTR_ERR(channel);
 		goto exit;
 	}
-	ipc_send_message(channel, (void *) msg_handle);
+	mbox_send_message(channel, (void *) msg_handle);
 	wait_for_completion(&therm->comp);
-	ipc_free_channel(channel);
+	mbox_free_channel(channel);
 exit:
 	mutex_unlock(&therm->lock);
 	return ret;
@@ -230,6 +230,7 @@ static int bcm2835_thermal_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 	therm->dev = dev;
+	dev_set_drvdata(dev, therm);
 	mutex_init(&therm->lock);
 	init_completion(&therm->comp);
 	therm->thermal_dev = thermal_zone_device_register("bcm2835_thermal", 1,
@@ -238,7 +239,6 @@ static int bcm2835_thermal_probe(struct platform_device *pdev)
 		dev_err(dev, "Unable to register the thermal device");
 		return PTR_ERR(therm->thermal_dev);
 	}
-	platform_set_drvdata(pdev, therm);
 	dev_info(dev, "%s enabled\n", pdev->name);
 	return 0;
 }
@@ -246,7 +246,8 @@ static int bcm2835_thermal_probe(struct platform_device *pdev)
 
 static int bcm2835_thermal_remove(struct platform_device *pdev)
 {
-	struct bcm2835_therm *therm = platform_get_drvdata(pdev);
+	struct bcm2835_therm *therm = dev_get_drvdata(&pdev->dev);
+
 	thermal_zone_device_unregister(therm->thermal_dev);
 	return 0;
 }
