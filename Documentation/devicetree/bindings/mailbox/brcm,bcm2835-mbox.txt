@@ -1,0 +1,21 @@
+Broadcom BCM2835 VideoCore mailbox IPC
+
+Required properties:
+
+- compatible : should be "brcm,bcm2835-mbox"
+- reg : Specifies base physical address and size of the registers.
+- interrupts : the interrupt number. Must be <0 1>, the mailbox interrupt.
+- brcm,channel-nums : The mailbox channels in use.
+- brcm,channel-names : list of symbolic channel names for mailbox clients to
+  use.
+
+The number of channel numbers must match the number of channel names.
+
+Example:
+
+mailbox@0x7e00b800 {
+	reg = <0x7e00b880 0x40>;
+	interrupts = <0 1>;
+	brcm,channel-nums = <0 1 3 8>;
+	brcm,channel-names = "power", "fb", "vchiq", "property";
+};
