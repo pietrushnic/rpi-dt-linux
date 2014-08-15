@@ -1,0 +1,23 @@
+Broadcom BCM2835 Arasan EMMC controller
+
+This file documents differences between the core properties described
+by mmc.txt and the properties that represent the BCM2835 controller.
+
+Required properties:
+- compatible : Should be "brcm,bcm2835-mmc".
+- clocks : The clock feeding the EMMC controller.
+- dmas : DMA specifiers for tx and rx dma.
+- dma-names: RX and TX  DMA request names.
+
+Example:
+
+mmc: mmc@7e300000 {
+		compatible = "brcm,bcm2835-mmc";
+		reg = <0x7e300000 0x100>;
+		interrupts = <2 30>;
+		clocks = <&clk_mmc>;
+		dmas = <&dma 5>,
+		<&dma 5>;
+		dma-names = "tx", "rx";
+		status = "disabled";
+}
