@@ -111,7 +111,7 @@ static int bcm2835_send_data(struct mbox_chan *link, void *data)
 	if (!chan->started)
 		return -ENODEV;
 	spin_lock(&mbox->lock);
-	if (readl(mbox->regs + MAIL0_STA) & ARM_MS_FULL) {
+	if (!(readl(mbox->regs + MAIL1_STA) & ARM_MS_EMPTY)) {
 		rmb(); /* Finished last mailbox read. */
 		ret = -EBUSY;
 		goto end;
