@@ -47,6 +47,7 @@
 #define MAIL0_STA	(ARM_0_MAIL0 + 0x18)
 #define MAIL0_CNF	(ARM_0_MAIL0 + 0x1C)
 #define MAIL1_WRT	(ARM_0_MAIL1 + 0x00)
+#define MAIL1_STA	(ARM_0_MAIL1 + 0x18)
 
 #define MBOX_CHAN_COUNT		16
 
@@ -146,7 +147,7 @@ static bool bcm2835_last_tx_done(struct mbox_chan *link)
 	if (!chan->started)
 		return false;
 	spin_lock(&mbox->lock);
-	ret = !(readl(mbox->regs + MAIL0_STA) & ARM_MS_FULL);
+	ret = !!(readl(mbox->regs + MAIL1_STA) & ARM_MS_EMPTY);
 	rmb();
 	spin_unlock(&mbox->lock);
 	return ret;
