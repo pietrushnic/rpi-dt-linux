@@ -1,11 +1,12 @@
 /*
  * BCM2835 DMA engine support
  *
- * This driver only supports cyclic DMA transfers
- * as needed for the I2S module.
+ * This driver supports cyclic and scatter/gather DMA transfers.
  *
- * Author:      Florian Meier <florian.meier@koalo.de>
- *              Copyright 2013
+ * Author:	Florian Meier <florian.meier@koalo.de>
+ *		Gellert Weisz <gellert@raspberrypi.org>
+ *		Piotr Król <piotr.krol@3mdeb.com>
+ *		Copyright 2013-2014
  *
  * Based on
  *	OMAP DMAengine support by Russell King
@@ -105,12 +106,18 @@ struct bcm2835_desc {
 #define BCM2835_DMA_RESET	BIT(31) /* WO, self clearing */
 
 #define BCM2835_DMA_INT_EN	BIT(0)
+#define BCM2835_DMA_WAIT_RESP	BIT(3)
 #define BCM2835_DMA_D_INC	BIT(4)
+#define BCM2835_DMA_D_WIDTH	BIT(5)
 #define BCM2835_DMA_D_DREQ	BIT(6)
 #define BCM2835_DMA_S_INC	BIT(8)
+#define BCM2835_DMA_S_WIDTH	BIT(9)
 #define BCM2835_DMA_S_DREQ	BIT(10)
 
 #define BCM2835_DMA_PER_MAP(x)	((x) << 16)
+#define	BCM2835_DMA_WAITS(x)	(((x)&0x1f) << 21)
+
+#define SDHCI_BCM_DMA_WAITS 0  /* delays slowing DMA transfers: 0-31 */
 
 #define BCM2835_DMA_DATA_TYPE_S8	1
 #define BCM2835_DMA_DATA_TYPE_S16	2
@@ -123,6 +130,9 @@ struct bcm2835_desc {
 /* Valid only for channels 0 - 14, 15 has its own base address */
 #define BCM2835_DMA_CHAN(n)	((n) << 8) /* Base address */
 #define BCM2835_DMA_CHANIO(base, n) ((base) + BCM2835_DMA_CHAN(n))
+
+#define MAX_LITE_TRANSFER 32768
+#define MAX_NORMAL_TRANSFER 1073741824
 
 static inline struct bcm2835_dmadev *to_bcm2835_dma_dev(struct dma_device *d)
 {
@@ -140,9 +150,11 @@ static inline struct bcm2835_desc *to_bcm2835_dma_desc(
 	return container_of(t, struct bcm2835_desc, vd.tx);
 }
 
+
 static void bcm2835_dma_desc_free(struct virt_dma_desc *vd)
 {
 	struct bcm2835_desc *desc = container_of(vd, struct bcm2835_desc, vd);
+
 	dma_free_coherent(desc->vd.tx.chan->device->dev,
 			desc->control_block_size,
 			desc->control_block_base,
@@ -217,12 +229,18 @@ static irqreturn_t bcm2835_dma_callback(int irq, void *data)
 	d = c->desc;
 
 	if (d) {
-		/* TODO Only works for cyclic DMA */
-		vchan_cyclic_callback(&d->vd);
-	}
+		if (c->cyclic) {
+			vchan_cyclic_callback(&d->vd);
 
-	/* Keep the DMA engine running */
-	writel(BCM2835_DMA_ACTIVE, c->chan_base + BCM2835_DMA_CS);
+			/* Keep the DMA engine running */
+			writel(BCM2835_DMA_ACTIVE,
+				c->chan_base + BCM2835_DMA_CS);
+
+		} else {
+			vchan_cookie_complete(&c->desc->vd);
+			bcm2835_dma_start_desc(c);
+		}
+	}
 
 	spin_unlock_irqrestore(&c->vc.lock, flags);
 
@@ -232,12 +250,15 @@ static irqreturn_t bcm2835_dma_callback(int irq, void *data)
 static int bcm2835_dma_alloc_chan_resources(struct dma_chan *chan)
 {
 	struct bcm2835_chan *c = to_bcm2835_dma_chan(chan);
+	int ret;
 
 	dev_dbg(c->vc.chan.device->dev,
 			"Allocating DMA channel %d\n", c->ch);
 
-	return request_irq(c->irq_number,
+	ret = request_irq(c->irq_number,
 			bcm2835_dma_callback, 0, "DMA IRQ", c);
+
+	return ret;
 }
 
 static void bcm2835_dma_free_chan_resources(struct dma_chan *chan)
@@ -284,9 +305,11 @@ static enum dma_status bcm2835_dma_tx_status(struct dma_chan *chan,
 	dma_cookie_t cookie, struct dma_tx_state *txstate)
 {
 	struct bcm2835_chan *c = to_bcm2835_dma_chan(chan);
+	struct bcm2835_desc *d;
 	struct virt_dma_desc *vd;
 	enum dma_status ret;
 	unsigned long flags;
+	dma_addr_t pos;
 
 	ret = dma_cookie_status(chan, cookie, txstate);
 	if (ret == DMA_COMPLETE || !txstate)
@@ -298,8 +321,7 @@ static enum dma_status bcm2835_dma_tx_status(struct dma_chan *chan,
 		txstate->residue =
 			bcm2835_dma_desc_size(to_bcm2835_dma_desc(&vd->tx));
 	} else if (c->desc && c->desc->vd.tx.cookie == cookie) {
-		struct bcm2835_desc *d = c->desc;
-		dma_addr_t pos;
+		d = c->desc;
 
 		if (d->dir == DMA_MEM_TO_DEV)
 			pos = readl(c->chan_base + BCM2835_DMA_SOURCE_AD);
@@ -322,8 +344,6 @@ static void bcm2835_dma_issue_pending(struct dma_chan *chan)
 {
 	struct bcm2835_chan *c = to_bcm2835_dma_chan(chan);
 	unsigned long flags;
-
-	c->cyclic = true; /* Nothing else is implemented */
 
 	spin_lock_irqsave(&c->vc.lock, flags);
 	if (vchan_issue_pending(&c->vc) && !c->desc)
@@ -415,9 +435,9 @@ static struct dma_async_tx_descriptor *bcm2835_dma_prep_dma_cyclic(
 			control_block->info |= sync_type;
 
 		/* Setup DREQ channel */
-		if (c->dreq != 0)
+		if (c->cfg.slave_id != 0)
 			control_block->info |=
-				BCM2835_DMA_PER_MAP(c->dreq);
+				BCM2835_DMA_PER_MAP(c->cfg.slave_id);
 
 		/* Length of a frame */
 		control_block->length = period_len;
@@ -425,13 +445,167 @@ static struct dma_async_tx_descriptor *bcm2835_dma_prep_dma_cyclic(
 
 		/*
 		 * Next block is the next frame.
-		 * This DMA engine driver currently only supports cyclic DMA.
+		 * This function is called on cyclic DMA transfers.
 		 * Therefore, wrap around at number of frames.
 		 */
 		control_block->next = d->control_block_base_phys +
 			sizeof(struct bcm2835_dma_cb)
 			* ((frame + 1) % d->frames);
 	}
+
+	c->cyclic = true;
+
+	return vchan_tx_prep(&c->vc, &d->vd, flags);
+}
+
+
+static struct dma_async_tx_descriptor *bcm2835_dma_prep_slave_sg(
+	struct dma_chan *chan, struct scatterlist *sgl,
+	unsigned int sg_len, enum dma_transfer_direction direction,
+	unsigned long flags, void *context)
+{
+	struct bcm2835_chan *c = to_bcm2835_dma_chan(chan);
+	enum dma_slave_buswidth dev_width;
+	struct bcm2835_desc *d;
+	dma_addr_t dev_addr;
+	struct scatterlist *sgent;
+	unsigned int es, sync_type;
+	unsigned int i, j, splitct, max_size;
+
+	if (!is_slave_direction(direction)) {
+		dev_err(chan->device->dev, "%s: bad direction?\n", __func__);
+		return NULL;
+	}
+
+	if (direction == DMA_DEV_TO_MEM) {
+		dev_addr = c->cfg.src_addr;
+		dev_width = c->cfg.src_addr_width;
+		sync_type = BCM2835_DMA_S_DREQ;
+	} else {
+		dev_addr = c->cfg.dst_addr;
+		dev_width = c->cfg.dst_addr_width;
+		sync_type = BCM2835_DMA_D_DREQ;
+	}
+
+	/* Bus width translates to the element size (ES) */
+	switch (dev_width) {
+	case DMA_SLAVE_BUSWIDTH_4_BYTES:
+		es = BCM2835_DMA_DATA_TYPE_S32;
+		break;
+	default:
+		return NULL;
+	}
+
+	/* Now allocate and setup the descriptor. */
+	d = kzalloc(sizeof(*d), GFP_NOWAIT);
+	if (!d)
+		return NULL;
+
+	d->dir = direction;
+
+	if (c->ch >= 8) /* we have a LITE channel */
+		max_size = MAX_LITE_TRANSFER;
+	else
+		max_size = MAX_NORMAL_TRANSFER;
+
+	/* We store the length of the SG list in d->frames
+	   taking care to account for splitting up transfers
+	   too large for a LITE channel */
+
+	d->frames = 0;
+	for_each_sg(sgl, sgent, sg_len, i) {
+		uint32_t len = sg_dma_len(sgent);
+
+		d->frames += 1 + len / max_size;
+	}
+
+	/* Allocate memory for control blocks */
+	d->control_block_size = d->frames * sizeof(struct bcm2835_dma_cb);
+	d->control_block_base = dma_zalloc_coherent(chan->device->dev,
+			d->control_block_size, &d->control_block_base_phys,
+			GFP_NOWAIT);
+
+	if (!d->control_block_base) {
+		kfree(d);
+		return NULL;
+	}
+
+	/*
+	 * Iterate over all SG entries, create a control block
+	 * for each frame and link them together.
+	 */
+
+	/* we count the number of times an SG entry had to be splitct
+	   as a result of using a LITE channel */
+	splitct = 0;
+
+	for_each_sg(sgl, sgent, sg_len, i) {
+		dma_addr_t addr = sg_dma_address(sgent);
+		uint32_t len = sg_dma_len(sgent);
+
+		for (j = 0; j < len; j += max_size) {
+			struct bcm2835_dma_cb *control_block =
+				&d->control_block_base[i+splitct];
+
+			/* Setup adresses */
+			if (d->dir == DMA_DEV_TO_MEM) {
+				control_block->info = BCM2835_DMA_D_INC |
+						      BCM2835_DMA_D_WIDTH |
+						      BCM2835_DMA_S_DREQ;
+				control_block->src = dev_addr;
+				control_block->dst = addr + (dma_addr_t)j;
+			} else {
+				control_block->info = BCM2835_DMA_S_INC |
+						      BCM2835_DMA_S_WIDTH |
+						      BCM2835_DMA_D_DREQ;
+				control_block->src = addr + (dma_addr_t)j;
+				control_block->dst = dev_addr;
+			}
+
+			/* Common part */
+			control_block->info |=
+				BCM2835_DMA_WAITS(SDHCI_BCM_DMA_WAITS);
+			control_block->info |= BCM2835_DMA_WAIT_RESP;
+
+			/* Enable  */
+			if (i == sg_len-1 && len-j <= max_size)
+				control_block->info |= BCM2835_DMA_INT_EN;
+
+			/* Setup synchronization */
+			if (sync_type != 0)
+				control_block->info |= sync_type;
+
+			/* Setup DREQ channel */
+			c->dreq = c->cfg.slave_id; /* DREQ loaded from config */
+
+			if (c->dreq != 0)
+				control_block->info |=
+					BCM2835_DMA_PER_MAP(c->dreq);
+
+			/* Length of a frame */
+			control_block->length = min(len-j, max_size);
+			d->size += control_block->length;
+
+			/*
+			 * Next block is the next frame.
+			 */
+			if (i < sg_len-1 || len-j > max_size) {
+				/* next block is the next frame. */
+				control_block->next =
+					d->control_block_base_phys +
+					sizeof(struct bcm2835_dma_cb) *
+					(i + splitct + 1);
+			} else {
+				/* next block is empty. */
+				control_block->next = 0;
+			}
+
+			if (len-j > max_size)
+				splitct++;
+		}
+	}
+
+	c->cyclic = false;
 
 	return vchan_tx_prep(&c->vc, &d->vd, flags);
 }
@@ -619,6 +793,7 @@ static int bcm2835_dma_probe(struct platform_device *pdev)
 	od->ddev.device_issue_pending = bcm2835_dma_issue_pending;
 	od->ddev.device_slave_caps = bcm2835_dma_device_slave_caps;
 	od->ddev.device_prep_dma_cyclic = bcm2835_dma_prep_dma_cyclic;
+	od->ddev.device_prep_slave_sg = bcm2835_dma_prep_slave_sg;
 	od->ddev.device_control = bcm2835_dma_control;
 	od->ddev.dev = &pdev->dev;
 	INIT_LIST_HEAD(&od->ddev.channels);
@@ -704,4 +879,5 @@ module_platform_driver(bcm2835_dma_driver);
 MODULE_ALIAS("platform:bcm2835-dma");
 MODULE_DESCRIPTION("BCM2835 DMA engine driver");
 MODULE_AUTHOR("Florian Meier <florian.meier@koalo.de>");
+MODULE_AUTHOR("Gellert Weisz <gellert@raspberrypi.org>");
 MODULE_LICENSE("GPL v2");
