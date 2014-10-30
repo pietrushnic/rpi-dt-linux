@@ -292,6 +292,15 @@ config MMC_SDHCI_BCM2835
 
 	  If unsure, say N.
 
+config MMC_SDHCI_BCM2835_VERIFY_WORKAROUND
+	bool "Verify BCM2835 workaround does not do back to back writes"
+	depends on MMC_SDHCI_BCM2835
+	default y
+	help
+	  This enables code that verifies the bcm2835 workaround.
+	  The verification code checks that back to back writes to the same
+	  register do not occur.
+
 config MMC_MOXART
 	tristate "MOXART SD/MMC Host Controller support"
 	depends on ARCH_MOXART && MMC
