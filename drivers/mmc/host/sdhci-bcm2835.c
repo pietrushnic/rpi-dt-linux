@@ -54,6 +54,8 @@ struct bcm2835_sdhci {
 	u32 shadow;
 };
 
+#define REG_OFFSET_IN_BITS(reg) ((reg) << 3 & 0x18)
+
 static inline u32 bcm2835_sdhci_readl(struct sdhci_host *host, int reg)
 {
 	u32 val = readl(host->ioaddr + reg);
@@ -67,20 +69,14 @@ static inline u32 bcm2835_sdhci_readl(struct sdhci_host *host, int reg)
 static u16 bcm2835_sdhci_readw(struct sdhci_host *host, int reg)
 {
 	u32 val = bcm2835_sdhci_readl(host, (reg & ~3));
-	u32 word_num = (reg >> 1) & 1;
-	u32 word_shift = word_num * 16;
-	u32 word = (val >> word_shift) & 0xffff;
-
+	u16 word = val >> REG_OFFSET_IN_BITS(reg) & 0xffff;
 	return word;
 }
 
 static u8 bcm2835_sdhci_readb(struct sdhci_host *host, int reg)
 {
 	u32 val = bcm2835_sdhci_readl(host, (reg & ~3));
-	u32 byte_num = reg & 3;
-	u32 byte_shift = byte_num * 8;
-	u32 byte = (val >> byte_shift) & 0xff;
-
+	u8 byte = val >> REG_OFFSET_IN_BITS(reg) & 0xff;
 	return byte;
 }
 
@@ -98,8 +94,7 @@ static void bcm2835_sdhci_writew(struct sdhci_host *host, u16 val, int reg)
 	struct bcm2835_sdhci *bcm2835_host = pltfm_host->priv;
 	u32 oldval = (reg == SDHCI_COMMAND) ? bcm2835_host->shadow :
 		bcm2835_sdhci_readl(host, reg & ~3);
-	u32 word_num = (reg >> 1) & 1;
-	u32 word_shift = word_num * 16;
+	u32 word_shift = REG_OFFSET_IN_BITS(reg);
 	u32 mask = 0xffff << word_shift;
 	u32 newval = (oldval & ~mask) | (val << word_shift);
 
@@ -112,8 +107,7 @@ static void bcm2835_sdhci_writew(struct sdhci_host *host, u16 val, int reg)
 static void bcm2835_sdhci_writeb(struct sdhci_host *host, u8 val, int reg)
 {
 	u32 oldval = bcm2835_sdhci_readl(host, reg & ~3);
-	u32 byte_num = reg & 3;
-	u32 byte_shift = byte_num * 8;
+	u32 byte_shift = REG_OFFSET_IN_BITS(reg);
 	u32 mask = 0xff << byte_shift;
 	u32 newval = (oldval & ~mask) | (val << byte_shift);
 
