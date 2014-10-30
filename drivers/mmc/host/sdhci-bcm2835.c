@@ -27,6 +27,9 @@
 struct bcm2835_sdhci_host {
 	u32 shadow_cmd;
 	u32 shadow_blk;
+#ifdef CONFIG_MMC_SDHCI_BCM2835_VERIFY_WORKAROUND
+	int previous_reg;
+#endif
 };
 
 #define REG_OFFSET_IN_BITS(reg) ((reg) << 3 & 0x18)
@@ -58,6 +61,20 @@ static u8 bcm2835_sdhci_readb(struct sdhci_host *host, int reg)
 static inline void bcm2835_sdhci_writel(struct sdhci_host *host,
 						u32 val, int reg)
 {
+#ifdef CONFIG_MMC_SDHCI_BCM2835_VERIFY_WORKAROUND
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct bcm2835_sdhci_host *bcm2835_host = pltfm_host->priv;
+
+	if (bcm2835_host->previous_reg == reg) {
+		if ((reg != SDHCI_HOST_CONTROL)
+			&& (reg != SDHCI_CLOCK_CONTROL)) {
+			dev_err(mmc_dev(host->mmc),
+			"back-to-back write to 0x%x\n", reg);
+		}
+	}
+	bcm2835_host->previous_reg = reg;
+#endif
+
 	writel(val, host->ioaddr + reg);
 }
 
