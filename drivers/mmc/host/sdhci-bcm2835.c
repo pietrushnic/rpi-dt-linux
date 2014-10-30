@@ -54,13 +54,6 @@ struct bcm2835_sdhci {
 	u32 shadow;
 };
 
-static void bcm2835_sdhci_writel(struct sdhci_host *host, u32 val, int reg)
-{
-	writel(val, host->ioaddr + reg);
-
-	udelay(BCM2835_SDHCI_WRITE_DELAY);
-}
-
 static inline u32 bcm2835_sdhci_readl(struct sdhci_host *host, int reg)
 {
 	u32 val = readl(host->ioaddr + reg);
@@ -70,6 +63,34 @@ static inline u32 bcm2835_sdhci_readl(struct sdhci_host *host, int reg)
 
 	return val;
 }
+
+static u16 bcm2835_sdhci_readw(struct sdhci_host *host, int reg)
+{
+	u32 val = bcm2835_sdhci_readl(host, (reg & ~3));
+	u32 word_num = (reg >> 1) & 1;
+	u32 word_shift = word_num * 16;
+	u32 word = (val >> word_shift) & 0xffff;
+
+	return word;
+}
+
+static u8 bcm2835_sdhci_readb(struct sdhci_host *host, int reg)
+{
+	u32 val = bcm2835_sdhci_readl(host, (reg & ~3));
+	u32 byte_num = reg & 3;
+	u32 byte_shift = byte_num * 8;
+	u32 byte = (val >> byte_shift) & 0xff;
+
+	return byte;
+}
+
+static void bcm2835_sdhci_writel(struct sdhci_host *host, u32 val, int reg)
+{
+	writel(val, host->ioaddr + reg);
+
+	udelay(BCM2835_SDHCI_WRITE_DELAY);
+}
+
 
 static void bcm2835_sdhci_writew(struct sdhci_host *host, u16 val, int reg)
 {
@@ -88,16 +109,6 @@ static void bcm2835_sdhci_writew(struct sdhci_host *host, u16 val, int reg)
 		bcm2835_sdhci_writel(host, newval, reg & ~3);
 }
 
-static u16 bcm2835_sdhci_readw(struct sdhci_host *host, int reg)
-{
-	u32 val = bcm2835_sdhci_readl(host, (reg & ~3));
-	u32 word_num = (reg >> 1) & 1;
-	u32 word_shift = word_num * 16;
-	u32 word = (val >> word_shift) & 0xffff;
-
-	return word;
-}
-
 static void bcm2835_sdhci_writeb(struct sdhci_host *host, u8 val, int reg)
 {
 	u32 oldval = bcm2835_sdhci_readl(host, reg & ~3);
@@ -109,28 +120,18 @@ static void bcm2835_sdhci_writeb(struct sdhci_host *host, u8 val, int reg)
 	bcm2835_sdhci_writel(host, newval, reg & ~3);
 }
 
-static u8 bcm2835_sdhci_readb(struct sdhci_host *host, int reg)
-{
-	u32 val = bcm2835_sdhci_readl(host, (reg & ~3));
-	u32 byte_num = reg & 3;
-	u32 byte_shift = byte_num * 8;
-	u32 byte = (val >> byte_shift) & 0xff;
-
-	return byte;
-}
-
 static unsigned int bcm2835_sdhci_get_min_clock(struct sdhci_host *host)
 {
 	return MIN_FREQ;
 }
 
 static const struct sdhci_ops bcm2835_sdhci_ops = {
-	.write_l = bcm2835_sdhci_writel,
-	.write_w = bcm2835_sdhci_writew,
-	.write_b = bcm2835_sdhci_writeb,
 	.read_l = bcm2835_sdhci_readl,
 	.read_w = bcm2835_sdhci_readw,
 	.read_b = bcm2835_sdhci_readb,
+	.write_l = bcm2835_sdhci_writel,
+	.write_w = bcm2835_sdhci_writew,
+	.write_b = bcm2835_sdhci_writeb,
 	.set_clock = sdhci_set_clock,
 	.get_max_clock = sdhci_pltfm_clk_get_max_clock,
 	.get_min_clock = bcm2835_sdhci_get_min_clock,
